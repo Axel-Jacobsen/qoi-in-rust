@@ -90,7 +90,7 @@ struct PixelValue {
     a: u8,
 }
 
-fn hash_rgba(px: PixelValue) -> usize {
+fn hash_rgba(px: &PixelValue) -> usize {
     ((3 * px.r + 5 * px.g + 7 * px.b + 11 * px.a) % 64) as usize
 }
 
@@ -123,7 +123,6 @@ fn get_file_data() -> Result<ImageData, png::DecodingError> {
 fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let out_fname = "out.qf";
     let mut out_file = File::create(out_fname)?;
-    let mut write_buf = [0; CHUNK_SIZE];
 
     out_file.write(&get_qoif_header(&png_data));
 
@@ -148,15 +147,26 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
 
     let pixel_size = get_pixel_size(png_data.png_type);
 
-    let prev_run: Vec<PixelValue> = vec![];
+    let mut in_a_run: bool = false;
+    let mut prev_run: u8 = 0;
 
     for pixel in png_data.into_iter() {
-        if pixel == prev_pixel {}
-        // check for index
-        // check for diff
-        // check for luma
-        // check for run
-        // default to RGB or RGBA
+        // check for a run
+        if pixel == prev_pixel {
+            in_a_run = true;
+            prev_run += 1;
+        } else if in_a_run {
+            in_a_run = false;
+            prev_run; // write!
+            out_file.write_all([]);
+        } else {
+            // check for diff
+            // check for luma
+            // default to RGB or RGBA
+        };
+
+
+        prev_pixel_arr[hash_rgba(&pixel)] = pixel.clone();
     }
     Ok(())
 }
