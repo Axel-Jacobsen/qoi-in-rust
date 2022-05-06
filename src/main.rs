@@ -18,11 +18,28 @@ struct ImageData {
 
 impl<'a> IntoIterator for &'a ImageData {
     type Item = PixelValue;
-    type IntoIter = Iter<PixelValue>; // this is definitely wrong
+    type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         let pixel_size = get_pixel_size(self.png_type);
-        self.bytes.chunks(pixel_size).map(|ar| PixelValue(ar))
+        Box::new(
+            self.bytes
+                .chunks(pixel_size)
+                .map(move |chunk| match pixel_size {
+                    3 => PixelValue {
+                        r: chunk[0],
+                        g: chunk[1],
+                        b: chunk[2],
+                        a: 255,
+                    },
+                    _ => PixelValue {
+                        r: chunk[0],
+                        g: chunk[1],
+                        b: chunk[2],
+                        a: chunk[3],
+                    },
+                }),
+        )
     }
 }
 
@@ -112,13 +129,22 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
 
     let pixel_size = get_pixel_size(png_data.png_type);
 
-    let prev_pixel = if pixel_size == 3 {
-        [0, 0, 0]
-    } else {
-        [0, 0, 0, 255]
+    let prev_pixel = PixelValue {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
     };
 
-    let mut prev_pixel_arr = vec![prev_pixel, 64];
+    let mut prev_pixel_arr = vec![
+        PixelValue {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255
+        };
+        64
+    ];
 
     let pixel_size = get_pixel_size(png_data.png_type);
 
