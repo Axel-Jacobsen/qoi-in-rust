@@ -60,23 +60,6 @@ fn get_pixel_size(color_type: png::ColorType) -> usize {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct PixelValue {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-fn hash_rgba(px: &PixelValue) -> usize {
-    // use Wrapping? probably faster?
-    ((3_u64 * (px.r as u64)
-        + 5_u64 * (px.g as u64)
-        + 7_u64 * (px.b as u64)
-        + 11_u64 * (px.a as u64))
-        % 64) as usize
-}
-
 // i know that this is also garb but please be kind (for now)
 fn get_file_data() -> Result<ImageData, png::DecodingError> {
     let decoder = png::Decoder::new(File::open("lenna.png").unwrap());
@@ -101,6 +84,23 @@ fn get_file_data() -> Result<ImageData, png::DecodingError> {
         height: image_info.height,
         is_srgb: is_srgb,
     })
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PixelValue {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+fn hash_rgba(px: &PixelValue) -> usize {
+    // use Wrapping? probably faster?
+    ((3_u16 * (px.r as u16)
+        + 5_u16 * (px.g as u16)
+        + 7_u16 * (px.b as u16)
+        + 11_u16 * (px.a as u16))
+        % 64) as usize
 }
 
 fn pixel_previously_seen(p: &PixelValue, prev_seen: &Vec<PixelValue>) -> Option<usize> {
@@ -148,8 +148,8 @@ fn pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u
 fn get_qoif_header(id: &ImageData) -> [u8; 14] {
     let channels = get_pixel_size(id.png_type);
     let colorspace = id.is_srgb;
-    let width = id.width.to_ne_bytes();
-    let height = id.height.to_ne_bytes();
+    let width = id.width.to_be_bytes();
+    let height = id.height.to_be_bytes();
     [
         0x71,
         0x6F,
