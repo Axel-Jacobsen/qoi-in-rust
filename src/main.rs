@@ -1,11 +1,7 @@
-#![allow(unused)]
-
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
 
-// make config'able? also, this seems very verbose
-const CHUNK_SIZE: usize = 1e6 as usize;
 
 // i know that it is garb to do this but oh well
 struct ImageData {
@@ -71,7 +67,8 @@ fn get_file_data() -> Result<ImageData, png::DecodingError> {
     let bytes = &buf[..info.buffer_size()];
 
     let image_info = reader.info();
-    let is_srgb = if let Some(srgb_type) = image_info.srgb {
+    // we dont really handle this correctly, but close enough
+    let is_srgb = if let Some(_) = image_info.srgb {
         true
     } else {
         false
@@ -95,7 +92,7 @@ struct PixelValue {
 }
 
 fn hash_rgba(px: &PixelValue) -> usize {
-    // use Wrapping? probably faster?
+    // use Wrapping? probably faster cause transparent?
     ((3_u16 * (px.r as u16)
         + 5_u16 * (px.g as u16)
         + 7_u16 * (px.b as u16)
@@ -147,7 +144,6 @@ fn pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u
 
 fn get_qoif_header(id: &ImageData) -> [u8; 14] {
     let channels = get_pixel_size(id.png_type);
-    let colorspace = id.is_srgb;
     let width = id.width.to_be_bytes();
     let height = id.height.to_be_bytes();
     [
@@ -202,9 +198,7 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let out_fname = "out.qoi";
     let mut out_file = File::create(out_fname)?;
 
-    out_file.write_all(&get_qoif_header(&png_data));
-
-    let pixel_size = get_pixel_size(png_data.png_type);
+    out_file.write_all(&get_qoif_header(&png_data))?;
 
     let prev_pixel = PixelValue {
         r: 0,
@@ -234,32 +228,35 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
         } else if prev_run > 0 {
             // handle leaving a run
             prev_run = 0;
-            out_file.write_all(&encode_run(prev_run));
+            out_file.write_all(&encode_run(prev_run))?;
         } else if let Some(idx) = pixel_previously_seen(&pixel, &prev_pixel_arr) {
             // check for idx
-            out_file.write_all(&encode_idx(idx));
+            out_file.write_all(&encode_idx(idx))?;
         } else if let Some([dr, dg, db]) = pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
-            out_file.write_all(&encode_diff(dr, dg, db));
+            out_file.write_all(&encode_diff(dr, dg, db))?;
         } else if let Some([dg, drdg, dbdg]) = pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
-            out_file.write_all(&encode_luma(dg, drdg, dbdg));
+            out_file.write_all(&encode_luma(dg, drdg, dbdg))?;
         } else {
             if pixel_size == 3 {
-                out_file.write_all(&encode_qoip_rgb(&pixel));
+                out_file.write_all(&encode_qoip_rgb(&pixel))?;
             } else if pixel_size == 4 {
-                out_file.write_all(&encode_qoip_rgba(&pixel));
+                out_file.write_all(&encode_qoip_rgba(&pixel))?;
             } else {
                 panic!("How did you get here?!");
             }
         }
         prev_pixel_arr[hash_rgba(&pixel)] = pixel.clone();
     }
-    out_file.write_all(&get_qoif_footer());
+    if prev_run > 0 {
+        out_file.write_all(&encode_run(prev_run))?;
+    }
+    out_file.write_all(&get_qoif_footer())?;
     Ok(())
 }
 
-fn main() {
+fn main() -> std::io::Result<()>{
     /*
      *PNG -> QOI -> PNG?
      */
@@ -268,5 +265,5 @@ fn main() {
         png::ColorType::Rgb => encode_qoif(image_data),
         png::ColorType::Rgba => encode_qoif(image_data),
         _ => panic!("can not process {:?} at this time", image_data.png_type),
-    };
+    }
 }
