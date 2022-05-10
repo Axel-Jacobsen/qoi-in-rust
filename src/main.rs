@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fs::File;
+use std::io::Read;
 use std::io::Write;
-
 
 // i know that it is garb to do this but oh well
 struct ImageData {
@@ -57,8 +57,8 @@ fn get_pixel_size(color_type: png::ColorType) -> usize {
 }
 
 // i know that this is also garb but please be kind (for now)
-fn get_file_data() -> Result<ImageData, png::DecodingError> {
-    let decoder = png::Decoder::new(File::open("lenna.png").unwrap());
+fn get_encoding_file_data() -> Result<ImageData, png::DecodingError> {
+    let decoder = png::Decoder::new(File::open("lenna.png")?);
 
     let mut reader = decoder.read_info()?;
     let mut buf = vec![0; reader.output_buffer_size()];
@@ -79,6 +79,39 @@ fn get_file_data() -> Result<ImageData, png::DecodingError> {
         bytes: bytes.to_vec(),
         width: image_info.width,
         height: image_info.height,
+        is_srgb: is_srgb,
+    })
+}
+
+fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
+    let mut decoder = File::open("out.qoi").expect("file not found in get_decoding_file_data");
+
+    let mut header = [0; 14];
+    let header_bytes_written = decoder.read(&mut header)?;
+    assert!(header_bytes_written == 14);
+
+    if header[0..4] != [0x71, 0x6F, 0x69, 0x66] {
+        panic!("not a qoif file");
+    }
+
+    let width = u32::from_be_bytes(header[4..8].try_into().unwrap());
+    let height = u32::from_be_bytes(header[8..12].try_into().unwrap());
+    let channels = header[12];
+    let is_srgb = header[13] == 0;
+
+    // just read it all into mem like a degenerate
+    let mut data_bytes: Vec<u8> = vec![];
+    let _bytes_read = decoder.read_to_end(&mut data_bytes);
+
+    Ok(ImageData {
+        png_type: if channels == 3 {
+            png::ColorType::Rgb
+        } else {
+            png::ColorType::Rgba
+        },
+        bytes: data_bytes,
+        width: width,
+        height: height,
         is_srgb: is_srgb,
     })
 }
@@ -142,7 +175,7 @@ fn pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u
     }
 }
 
-fn get_qoif_header(id: &ImageData) -> [u8; 14] {
+fn create_qoif_header(id: &ImageData) -> [u8; 14] {
     let channels = get_pixel_size(id.png_type);
     let width = id.width.to_be_bytes();
     let height = id.height.to_be_bytes();
@@ -164,7 +197,7 @@ fn get_qoif_header(id: &ImageData) -> [u8; 14] {
     ]
 }
 
-fn get_qoif_footer() -> [u8; 8] {
+fn create_qoif_footer() -> [u8; 8] {
     [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
 }
 
@@ -198,7 +231,7 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let out_fname = "out.qoi";
     let mut out_file = File::create(out_fname)?;
 
-    out_file.write_all(&get_qoif_header(&png_data))?;
+    out_file.write_all(&create_qoif_header(&png_data))?;
 
     let prev_pixel = PixelValue {
         r: 0,
@@ -220,7 +253,12 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let pixel_size = get_pixel_size(png_data.png_type);
 
     let mut prev_run: u8 = 0;
-
+    let mut run = 0;
+    let mut index = 0;
+    let mut diff = 0;
+    let mut luma = 0;
+    let mut rgbw = 0;
+    let mut rgbaw = 0;
     for pixel in png_data.into_iter() {
         if pixel == prev_pixel && prev_run < 62 {
             // check for a run
@@ -229,20 +267,26 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
             // handle leaving a run
             prev_run = 0;
             out_file.write_all(&encode_run(prev_run))?;
+            run += 1;
         } else if let Some(idx) = pixel_previously_seen(&pixel, &prev_pixel_arr) {
             // check for idx
             out_file.write_all(&encode_idx(idx))?;
+            index += 1;
         } else if let Some([dr, dg, db]) = pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
             out_file.write_all(&encode_diff(dr, dg, db))?;
+            diff += 1;
         } else if let Some([dg, drdg, dbdg]) = pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
             out_file.write_all(&encode_luma(dg, drdg, dbdg))?;
+            luma += 1;
         } else {
             if pixel_size == 3 {
                 out_file.write_all(&encode_qoip_rgb(&pixel))?;
+                rgbw += 1;
             } else if pixel_size == 4 {
                 out_file.write_all(&encode_qoip_rgba(&pixel))?;
+                rgbaw += 1;
             } else {
                 panic!("How did you get here?!");
             }
@@ -251,19 +295,95 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     }
     if prev_run > 0 {
         out_file.write_all(&encode_run(prev_run))?;
+        run += 1;
     }
-    out_file.write_all(&get_qoif_footer())?;
+    out_file.write_all(&create_qoif_footer())?;
+    println!("run {} idx {} diff {} luma {} rgb {} rgba {}", run, index, diff, luma, rgbw, rgbaw);
     Ok(())
 }
 
-fn main() -> std::io::Result<()>{
+fn grab_n<T: Clone>(itr: &mut std::slice::Iter<T>, n: u8) -> Option<Vec<T>> {
+    let mut v: Vec<T> = vec![];
+    for _ in 0..n {
+        match itr.next() {
+            Some(el) => v.push(el.clone()),
+            None => return None,
+        }
+    }
+    Some(v)
+}
+
+fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
+    let out_fname = "lenna2.png";
+    let mut _out_file = File::create(out_fname)?;
+
+    let prev_pixel = PixelValue {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+
+    let mut prev_pixel_arr = vec![
+        PixelValue {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0
+        };
+        64
+    ];
+
+    // let pixel_size = get_pixel_size(png_data.png_type);
+
+    let mut prev_run: u8 = 0;
+
+    let mut run = 0;
+    let mut index = 0;
+    let mut diff = 0;
+    let mut luma = 0;
+    let mut rgbw = 0;
+    let mut rgbaw = 0;
+
+    let end_of_data = qoi_data.bytes.len() - 8;
+    let mut qoi_iter = qoi_data.bytes[..end_of_data].iter();
+    while let Some(&next_byte) = qoi_iter.next() {
+        // check for 8-bit tags
+        if next_byte == 0xFE {
+            let rgb = grab_n(&mut qoi_iter, 3).unwrap();
+            rgbw += 1;
+        } else if next_byte == 0xFF {
+            let rgba = grab_n(&mut qoi_iter, 4).unwrap();
+            rgbaw += 1;
+        } else if next_byte >> 6 == 0b00 {
+            index += 1;
+        } else if next_byte >> 6 == 0b01 {
+            diff += 1;
+        } else if next_byte >> 6 == 0b10 {
+            luma += 1;
+            grab_n(&mut qoi_iter, 1).unwrap();
+        } else if next_byte >> 6 == 0b11 {
+            run += 1;
+        } else {
+            panic!("UNRECOGNIZED BYTE {}", next_byte);
+        }
+    }
+
+    println!("run {} idx {} diff {} luma {} rgb {} rgba {}", run, index, diff, luma, rgbw, rgbaw);
+    Ok(())
+}
+
+fn main() -> std::io::Result<()> {
     /*
      *PNG -> QOI -> PNG?
      */
-    let image_data = get_file_data().unwrap();
+    let image_data = get_encoding_file_data()?;
     match image_data.png_type {
         png::ColorType::Rgb => encode_qoif(image_data),
         png::ColorType::Rgba => encode_qoif(image_data),
         _ => panic!("can not process {:?} at this time", image_data.png_type),
-    }
+    }?;
+    let qoif_image_data = get_decoding_file_data()?;
+    decode_qoif(qoif_image_data)?;
+    Ok(())
 }
