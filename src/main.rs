@@ -2,6 +2,8 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
+use std::io::BufWriter;
+use std::path::Path;
 
 // i know that it is garb to do this but oh well
 struct ImageData {
@@ -253,12 +255,6 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let pixel_size = get_pixel_size(png_data.png_type);
 
     let mut prev_run: u8 = 0;
-    let mut run = 0;
-    let mut index = 0;
-    let mut diff = 0;
-    let mut luma = 0;
-    let mut rgbw = 0;
-    let mut rgbaw = 0;
     for pixel in png_data.into_iter() {
         if pixel == prev_pixel && prev_run < 62 {
             // check for a run
@@ -267,26 +263,20 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
             // handle leaving a run
             prev_run = 0;
             out_file.write_all(&encode_run(prev_run))?;
-            run += 1;
         } else if let Some(idx) = pixel_previously_seen(&pixel, &prev_pixel_arr) {
             // check for idx
             out_file.write_all(&encode_idx(idx))?;
-            index += 1;
         } else if let Some([dr, dg, db]) = pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
             out_file.write_all(&encode_diff(dr, dg, db))?;
-            diff += 1;
         } else if let Some([dg, drdg, dbdg]) = pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
             out_file.write_all(&encode_luma(dg, drdg, dbdg))?;
-            luma += 1;
         } else {
             if pixel_size == 3 {
                 out_file.write_all(&encode_qoip_rgb(&pixel))?;
-                rgbw += 1;
             } else if pixel_size == 4 {
                 out_file.write_all(&encode_qoip_rgba(&pixel))?;
-                rgbaw += 1;
             } else {
                 panic!("How did you get here?!");
             }
@@ -295,10 +285,8 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     }
     if prev_run > 0 {
         out_file.write_all(&encode_run(prev_run))?;
-        run += 1;
     }
     out_file.write_all(&create_qoif_footer())?;
-    println!("run {} idx {} diff {} luma {} rgb {} rgba {}", run, index, diff, luma, rgbw, rgbaw);
     Ok(())
 }
 
@@ -315,7 +303,16 @@ fn grab_n<T: Clone>(itr: &mut std::slice::Iter<T>, n: u8) -> Option<Vec<T>> {
 
 fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
     let out_fname = "lenna2.png";
-    let mut _out_file = File::create(out_fname)?;
+
+    let path = Path::new(out_fname);
+    let file = File::create(path)?;
+    let ref mut w = BufWriter::new(file);
+
+    let mut encoder = png::Encoder::new(w, qoi_data.width, qoi_data.height);
+    encoder.set_color(qoi_data.png_type);
+    encoder.set_depth(png::BitDepth::Eight);
+
+    let mut writer = encoder.write_header()?;
 
     let prev_pixel = PixelValue {
         r: 0,
@@ -334,16 +331,7 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
         64
     ];
 
-    // let pixel_size = get_pixel_size(png_data.png_type);
-
-    let mut prev_run: u8 = 0;
-
-    let mut run = 0;
-    let mut index = 0;
-    let mut diff = 0;
-    let mut luma = 0;
-    let mut rgbw = 0;
-    let mut rgbaw = 0;
+    let pixel_size = get_pixel_size(qoi_data.png_type);
 
     let end_of_data = qoi_data.bytes.len() - 8;
     let mut qoi_iter = qoi_data.bytes[..end_of_data].iter();
@@ -351,25 +339,18 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
         // check for 8-bit tags
         if next_byte == 0xFE {
             let rgb = grab_n(&mut qoi_iter, 3).unwrap();
-            rgbw += 1;
         } else if next_byte == 0xFF {
             let rgba = grab_n(&mut qoi_iter, 4).unwrap();
-            rgbaw += 1;
         } else if next_byte >> 6 == 0b00 {
-            index += 1;
         } else if next_byte >> 6 == 0b01 {
-            diff += 1;
         } else if next_byte >> 6 == 0b10 {
-            luma += 1;
             grab_n(&mut qoi_iter, 1).unwrap();
         } else if next_byte >> 6 == 0b11 {
-            run += 1;
         } else {
             panic!("UNRECOGNIZED BYTE {}", next_byte);
         }
     }
 
-    println!("run {} idx {} diff {} luma {} rgb {} rgba {}", run, index, diff, luma, rgbw, rgbaw);
     Ok(())
 }
 
