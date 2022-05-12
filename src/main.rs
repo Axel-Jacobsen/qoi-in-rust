@@ -135,7 +135,7 @@ fn hash_rgba(px: &PixelValue) -> usize {
         % 64) as usize
 }
 
-fn pixel_previously_seen(p: &PixelValue, prev_seen: &Vec<PixelValue>) -> Option<usize> {
+fn get_pixel_index(p: &PixelValue, prev_seen: &Vec<PixelValue>) -> Option<usize> {
     let pixel_hash = hash_rgba(p);
     if prev_seen[pixel_hash] == *p {
         Some(pixel_hash)
@@ -144,7 +144,7 @@ fn pixel_previously_seen(p: &PixelValue, prev_seen: &Vec<PixelValue>) -> Option<
     }
 }
 
-fn pixel_qoi_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u8; 3]> {
+fn get_pixel_qoi_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u8; 3]> {
     if prev_pixel.a != cur_pixel.a {
         return None;
     }
@@ -159,7 +159,7 @@ fn pixel_qoi_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u8
     }
 }
 
-fn pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u8; 3]> {
+fn get_pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option<[u8; 3]> {
     if prev_pixel.a != cur_pixel.a {
         return None;
     }
@@ -263,13 +263,13 @@ fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
             // handle leaving a run
             prev_run = 0;
             out_file.write_all(&encode_run(prev_run))?;
-        } else if let Some(idx) = pixel_previously_seen(&pixel, &prev_pixel_arr) {
+        } else if let Some(idx) = get_pixel_index(&pixel, &prev_pixel_arr) {
             // check for idx
             out_file.write_all(&encode_idx(idx))?;
-        } else if let Some([dr, dg, db]) = pixel_qoi_diff(&prev_pixel, &pixel) {
+        } else if let Some([dr, dg, db]) = get_pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
             out_file.write_all(&encode_diff(dr, dg, db))?;
-        } else if let Some([dg, drdg, dbdg]) = pixel_luma_diff(&prev_pixel, &pixel) {
+        } else if let Some([dg, drdg, dbdg]) = get_pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
             out_file.write_all(&encode_luma(dg, drdg, dbdg))?;
         } else {
@@ -314,7 +314,7 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
 
     let mut writer = encoder.write_header()?;
 
-    let prev_pixel = PixelValue {
+    let mut prev_pixel = PixelValue {
         r: 0,
         g: 0,
         b: 0,
@@ -332,6 +332,10 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
     ];
 
     let pixel_size = get_pixel_size(qoi_data.png_type);
+    let is_rgba = pixel_size == 4;
+
+    // way to size this?
+    let mut write_array = vec![];
 
     let end_of_data = qoi_data.bytes.len() - 8;
     let mut qoi_iter = qoi_data.bytes[..end_of_data].iter();
@@ -339,17 +343,97 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
         // check for 8-bit tags
         if next_byte == 0xFE {
             let rgb = grab_n(&mut qoi_iter, 3).unwrap();
+            write_array.push(rgb[0]);
+            write_array.push(rgb[1]);
+            write_array.push(rgb[2]);
+            prev_pixel = PixelValue {
+                r: rgb[0],
+                g:rgb[1],
+                b:rgb[2],
+                a: 255
+            };
+            prev_pixel_arr[hash_rgba(&prev_pixel)] = prev_pixel.clone();
         } else if next_byte == 0xFF {
             let rgba = grab_n(&mut qoi_iter, 4).unwrap();
+            write_array.push(rgba[0]);
+            write_array.push(rgba[1]);
+            write_array.push(rgba[2]);
+            write_array.push(rgba[3]);
+            prev_pixel = PixelValue {
+                r: rgba[0],
+                g:rgba[1],
+                b:rgba[2],
+                a: rgba[3]
+            };
+            prev_pixel_arr[hash_rgba(&prev_pixel)] = prev_pixel.clone();
         } else if next_byte >> 6 == 0b00 {
+            let idx = 0b00111111 | next_byte;
+            let p = &prev_pixel_arr[idx as usize];
+            write_array.push(p.r);
+            write_array.push(p.g);
+            write_array.push(p.b);
+            if is_rgba {
+                write_array.push(p.a);
+            };
+            prev_pixel = prev_pixel_arr[idx as usize].clone();
         } else if next_byte >> 6 == 0b01 {
+            let dr = 0b00110000 | next_byte;
+            let dg = 0b00001100 | next_byte;
+            let db = 0b00000011 | next_byte;
+            let r = prev_pixel.r + dr - 2;
+            let g = prev_pixel.g + dg - 2;
+            let b = prev_pixel.b + db - 2;
+            write_array.push(r);
+            write_array.push(g);
+            write_array.push(b);
+            if is_rgba {
+                write_array.push(prev_pixel.a);
+            }
+            prev_pixel = PixelValue {
+                r: r,
+                g: g,
+                b: b,
+                a: prev_pixel.a
+            };
+            prev_pixel_arr[hash_rgba(&prev_pixel)] = prev_pixel.clone();
         } else if next_byte >> 6 == 0b10 {
-            grab_n(&mut qoi_iter, 1).unwrap();
+            let drdg_dbdg = qoi_iter.next().expect("guh!");
+            let drdg = 0xF0 | drdg_dbdg;
+            let dbdg = 0x0F | drdg_dbdg;
+            let dg = (0b00111111 | next_byte) - 32;
+            let dr = drdg + dg - 8;
+            let db = dbdg + dg - 8;
+            let r = prev_pixel.r + dr;
+            let g = prev_pixel.g + dg;
+            let b = prev_pixel.b + db;
+            write_array.push(r);
+            write_array.push(g);
+            write_array.push(b);
+            if is_rgba {
+                write_array.push(prev_pixel.a);
+            }
+            prev_pixel = PixelValue {
+                r: r,
+                g: g,
+                b: b,
+                a: prev_pixel.a
+            };
+            prev_pixel_arr[hash_rgba(&prev_pixel)] = prev_pixel.clone();
         } else if next_byte >> 6 == 0b11 {
+            let run_length: _ = 0b00111111 | next_byte;
+            for _ in 0..run_length {
+                write_array.push(prev_pixel.r);
+                write_array.push(prev_pixel.g);
+                write_array.push(prev_pixel.b);
+                if is_rgba {
+                    write_array.push(prev_pixel.a);
+                };
+            }
         } else {
             panic!("UNRECOGNIZED BYTE {}", next_byte);
         }
     }
+    writer.write_image_data(&write_array).unwrap();
 
     Ok(())
 }
