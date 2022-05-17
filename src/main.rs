@@ -414,7 +414,7 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
             prev_pixel_arr[hash_rgba(&prev_pixel)] = prev_pixel.clone();
         } else if next_byte >> 6 == 0b10 {
             let drdg_dbdg = qoi_iter.next().expect("guh!");
-            let drdg = (0xF0 & drdg_dbdg) >> 4;
+            let drdg = 0x0F & (drdg_dbdg >> 4);
             let dbdg = 0x0F & drdg_dbdg;
 
             let dg = (0b00111111 & next_byte).wrapping_sub(32);
@@ -594,15 +594,39 @@ mod tests {
 
     #[test]
     fn basic_luma_diff() {
-        let id = gen_image_data(vec![240, 240, 240], 3, 1, false);
+        let id = gen_image_data(vec![240, 240, 240], 1, 1, false);
         let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 2 + 8);
         assert_eq!(out[14], 0x80 | 16);
         assert_eq!(out[15], 8 << 4 | 8 << 0);
+    }
+
+    #[test]
+    fn basic_luma_diff_2() {
+        let id = gen_image_data(vec![240, 240, 240, 200, 208, 215], 2, 1, false);
+        let out = calc_to_qoi(id).unwrap();
+        println!("{:?}", out);
+        assert_eq!(out.len(), 14 + 2 * 2 + 8);
+        assert_eq!(out[14], 0x80 | 16);
+        assert_eq!(out[15], 8 << 4 | 8 << 0);
+        assert_eq!(out[16], 0x80 | 0);
+        assert_eq!(out[17], 0 << 4 | 15 << 0);
         let od = gen_image_data(out, 3, 1, false);
         calc_from_qoi(od);
-        assert!(false);
+    }
+
+    #[test]
+    fn test_basic_run() {
+        let id = gen_image_data(vec![127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127], 6, 1, false);
+        let out = calc_to_qoi(id).unwrap();
+        println!("{:?}", out);
+        assert_eq!(out.len(), 14 + 4 + 1 + 8);
+        assert_eq!(out[14], 0xFE | 16);
+        assert_eq!(out[15], 127);
+        assert_eq!(out[16], 127);
+        assert_eq!(out[17], 127);
+        assert_eq!(out[18], 0xC0 | 5 - 1);
     }
 
     #[test]
