@@ -103,9 +103,11 @@ fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
     let channels = header[12];
     let is_srgb = header[13] == 0;
 
+    println!("outgoing num channels: {}", channels);
     // just read it all into mem like a degenerate
     let mut data_bytes: Vec<u8> = vec![];
     let _bytes_read = decoder.read_to_end(&mut data_bytes);
+    println!("bytes read: {:?}", _bytes_read);
 
     Ok(ImageData {
         png_type: if channels == 3 {
@@ -150,12 +152,12 @@ fn get_pixel_qoi_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Option
     if prev_pixel.a != cur_pixel.a {
         return None;
     }
-    let dr = (cur_pixel.r as i16) - (prev_pixel.r as i16);
-    let dg = (cur_pixel.g as i16) - (prev_pixel.g as i16);
-    let db = (cur_pixel.b as i16) - (prev_pixel.b as i16);
-    let dx_range: core::ops::Range<i16> = -2..2;
+    let dr = cur_pixel.r.wrapping_sub(prev_pixel.r).wrapping_add(2);
+    let dg = cur_pixel.g.wrapping_sub(prev_pixel.g).wrapping_add(2);
+    let db = cur_pixel.b.wrapping_sub(prev_pixel.b).wrapping_add(2);
+    let dx_range: core::ops::Range<u8> = 0..4;
     if dx_range.contains(&dr) && dx_range.contains(&dg) && dx_range.contains(&db) {
-        Some([(dr + 2) as u8, (dg + 2) as u8, (db + 2) as u8])
+        Some([dr, dg, db])
     } else {
         None
     }
@@ -165,19 +167,22 @@ fn get_pixel_luma_diff(prev_pixel: &PixelValue, cur_pixel: &PixelValue) -> Optio
     if prev_pixel.a != cur_pixel.a {
         return None;
     }
-    let dr = (cur_pixel.r as i8).wrapping_sub(prev_pixel.r as i8);
-    let dg = (cur_pixel.g as i8).wrapping_sub(prev_pixel.g as i8);
-    let db = (cur_pixel.b as i8).wrapping_sub(prev_pixel.b as i8);
-    let dr_dg = dr.wrapping_sub(dg);
-    let db_dg = db.wrapping_sub(dg);
-    let dg_range = -32..32;
-    let drdb_range = -8..8;
-    if dg_range.contains(&dg) && drdb_range.contains(&dr_dg) && drdb_range.contains(&db_dg) {
-        Some([
-            (dr as u8).wrapping_add(8),
-            (dg as u8).wrapping_add(32),
-            (db as u8).wrapping_add(8),
-        ])
+    let dr = cur_pixel.r.wrapping_sub(prev_pixel.r);
+    let dg = cur_pixel.g.wrapping_sub(prev_pixel.g);
+    let db = cur_pixel.b.wrapping_sub(prev_pixel.b);
+
+    let dr_dg = dr.wrapping_sub(dg).wrapping_add(8);
+    let db_dg = db.wrapping_sub(dg).wrapping_add(8);
+    let dg_fin = dg.wrapping_add(32);
+
+    let six_bit_range = 0..64;
+    let four_bit_range = 0..16;
+
+    if six_bit_range.contains(&dg_fin)
+        && four_bit_range.contains(&dr_dg)
+        && four_bit_range.contains(&db_dg)
+    {
+        Some([dg_fin, dr_dg, db_dg])
     } else {
         None
     }
@@ -267,22 +272,29 @@ fn calc_qoif(png_data: ImageData) -> std::io::Result<Vec<u8>> {
             continue;
         } else if prev_run > 0 {
             // handle leaving a run
+            println!("writing run of len {}", prev_run);
             out_file.extend(&encode_run(prev_run));
             prev_run = 0;
         }
+
         if let Some(idx) = get_pixel_index(&pixel, &prev_pixel_arr) {
             // check for idx
+            println!("idx {}", idx);
             out_file.extend(&encode_idx(idx));
         } else if let Some([dr, dg, db]) = get_pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
+            println!("diff {} {} {}", dr, dg, db);
             out_file.extend(&encode_diff(dr, dg, db));
-        } else if let Some([drdg, dg, dbdg]) = get_pixel_luma_diff(&prev_pixel, &pixel) {
+        } else if let Some([dg, drdg, dbdg]) = get_pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
+            println!("luma dg {} drdg {} dbdg {}", dg, drdg, dbdg);
             out_file.extend(&encode_luma(dg, drdg, dbdg));
         } else {
             if pixel_size == 3 {
+                println!("rgb {} {} {}", pixel.r, pixel.g, pixel.b);
                 out_file.extend(&encode_qoip_rgb(&pixel));
             } else if pixel_size == 4 {
+                println!("rgb {} {} {} {}", pixel.r, pixel.g, pixel.b, pixel.a);
                 out_file.extend(&encode_qoip_rgba(&pixel));
             } else {
                 panic!("How did you get here!");
@@ -417,8 +429,8 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
             let drdg = (0xF0 & drdg_dbdg) >> 4;
             let dbdg = 0x0F & drdg_dbdg;
             let dg = (0b00111111 & next_byte).wrapping_sub(32);
-            let dr = drdg.wrapping_add(dg).wrapping_sub(8);
-            let db = dbdg.wrapping_add(dg).wrapping_sub(8);
+            let dr = drdg.wrapping_sub(8).wrapping_add(dg);
+            let db = dbdg.wrapping_sub(8).wrapping_add(dg);
             let r = prev_pixel.r.wrapping_add(dr);
             let g = prev_pixel.g.wrapping_add(dg);
             let b = prev_pixel.b.wrapping_add(db);
@@ -461,8 +473,8 @@ fn write_dummy() -> std::io::Result<()> {
     let file = File::create(path)?;
     let ref mut w = BufWriter::new(file);
 
-    let width: u8 = 255;
-    let height: u8 = 255;
+    let width: u8 = 10;
+    let height: u8 = 10;
 
     let mut encoder = png::Encoder::new(w, width as u32, height as u32);
     encoder.set_color(png::ColorType::Rgb);
@@ -527,11 +539,11 @@ mod tests {
         let id = gen_image_data(vec![0x88, 0xFF, 0x88], 1, 1, false);
         let out = calc_qoif(id).unwrap();
         println!("{:?}", out);
-        assert!(out.len() == 14 + 4 + 8);
-        assert!(out[14] == 0xFE);
-        assert!(out[15] == 0x88);
-        assert!(out[16] == 0xFF);
-        assert!(out[17] == 0x88);
+        assert_eq!(out.len(), 14 + 4 + 8);
+        assert_eq!(out[14], 0xFE);
+        assert_eq!(out[15], 0x88);
+        assert_eq!(out[16], 0xFF);
+        assert_eq!(out[17], 0x88);
     }
 
     #[test]
@@ -539,12 +551,12 @@ mod tests {
         let id = gen_image_data(vec![0x12, 0x34, 0x56, 0x78], 1, 1, true);
         let out = calc_qoif(id).unwrap();
         println!("{:?}", out);
-        assert!(out.len() == 14 + 5 + 8);
-        assert!(out[14] == 0xFF);
-        assert!(out[15] == 0x12);
-        assert!(out[16] == 0x34);
-        assert!(out[17] == 0x56);
-        assert!(out[18] == 0x78);
+        assert_eq!(out.len(), 14 + 5 + 8);
+        assert_eq!(out[14], 0xFF);
+        assert_eq!(out[15], 0x12);
+        assert_eq!(out[16], 0x34);
+        assert_eq!(out[17], 0x56);
+        assert_eq!(out[18], 0x78);
     }
 
     #[test]
@@ -552,19 +564,29 @@ mod tests {
         let id = gen_image_data(vec![1, 1, 1], 1, 1, false);
         let out = calc_qoif(id).unwrap();
         println!("{:?}", out);
-        assert!(out.len() == 14 + 1 + 8);
-        assert!(out[14] == 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
+        assert_eq!(out.len(), 14 + 1 + 8);
+        assert_eq!(out[14], 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
     }
 
     #[test]
-    fn multi_diff() {
+    fn pos_neg_diff() {
         let id = gen_image_data(vec![1, 1, 1, 2, 2, 2, 0, 0, 0], 3, 1, false);
         let out = calc_qoif(id).unwrap();
         println!("{:?}", out);
-        assert!(out.len() == 14 + 3 + 8);
-        assert!(out[14] == 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
-        assert!(out[15] == 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
-        assert!(out[16] == 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
+        assert_eq!(out.len(), 14 + 3 + 8);
+        assert_eq!(out[14], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        assert_eq!(out[15], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        assert_eq!(out[16], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
+    }
+
+    #[test]
+    fn basic_luma_diff() {
+        let id = gen_image_data(vec![240, 240, 240], 3, 1, false);
+        let out = calc_qoif(id).unwrap();
+        println!("{:?}", out);
+        assert_eq!(out.len(), 14 + 2 + 8);
+        assert_eq!(out[14], 0x80 | 16);
+        assert_eq!(out[15], 8 << 4 | 8 << 0);
     }
 
     #[test]
@@ -588,14 +610,14 @@ mod tests {
 
         // luma + 2 * rgb + idx
         let expected_file_len = 14 + 2 + 2 * 4 + 1 + 8;
-        assert!(
-            out.len() == expected_file_len,
+        assert_eq!(
+            out.len(), expected_file_len,
             "out len is {} expected {}",
             out.len(),
             expected_file_len
         );
-        assert!(
-            out[24] == 0x00 | repeated_px_idx as u8,
+        assert_eq!(
+            out[24], 0x00 | repeated_px_idx as u8,
             "repeated_px_idx is {}",
             repeated_px_idx
         );
