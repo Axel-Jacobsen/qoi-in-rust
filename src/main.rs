@@ -240,7 +240,7 @@ fn encode_luma(dg: u8, drdg: u8, dbdg: u8) -> [u8; 2] {
     [0x80 | dg, drdg << 4 | dbdg << 0]
 }
 
-fn calc_qoif(png_data: ImageData) -> std::io::Result<Vec<u8>> {
+fn calc_to_qoi(png_data: ImageData) -> std::io::Result<Vec<u8>> {
     let mut out_file: Vec<u8> = vec![];
 
     out_file.extend(&create_qoif_header(&png_data));
@@ -314,7 +314,7 @@ fn calc_qoif(png_data: ImageData) -> std::io::Result<Vec<u8>> {
 fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let out_fname = "out.qoi";
     let mut out_file = File::create(out_fname)?;
-    let v = calc_qoif(png_data).unwrap();
+    let v = calc_to_qoi(png_data).unwrap();
     out_file.write_all(&v)
 }
 
@@ -329,19 +329,7 @@ fn grab_n<T: Clone>(itr: &mut std::slice::Iter<T>, n: u8) -> Option<Vec<T>> {
     Some(v)
 }
 
-fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
-    let out_fname = "lenna2.png";
-
-    let path = Path::new(out_fname);
-    let file = File::create(path)?;
-    let ref mut w = BufWriter::new(file);
-
-    let mut encoder = png::Encoder::new(w, qoi_data.width, qoi_data.height);
-    encoder.set_color(qoi_data.png_type);
-    encoder.set_depth(png::BitDepth::Eight);
-
-    let mut writer = encoder.write_header()?;
-
+fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
     let mut prev_pixel = PixelValue {
         r: 0,
         g: 0,
@@ -408,9 +396,9 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
             let dr = 0b00110000 & next_byte;
             let dg = 0b00001100 & next_byte;
             let db = 0b00000011 & next_byte;
-            let r = prev_pixel.r.wrapping_add(dr).wrapping_sub(2);
-            let g = prev_pixel.g.wrapping_add(dg).wrapping_sub(2);
-            let b = prev_pixel.b.wrapping_add(db).wrapping_sub(2);
+            let r = prev_pixel.r.wrapping_sub(2).wrapping_add(dr);
+            let g = prev_pixel.g.wrapping_sub(2).wrapping_add(dg);
+            let b = prev_pixel.b.wrapping_sub(2).wrapping_add(db);
             write_array.push(r);
             write_array.push(g);
             write_array.push(b);
@@ -428,12 +416,17 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
             let drdg_dbdg = qoi_iter.next().expect("guh!");
             let drdg = (0xF0 & drdg_dbdg) >> 4;
             let dbdg = 0x0F & drdg_dbdg;
+
             let dg = (0b00111111 & next_byte).wrapping_sub(32);
             let dr = drdg.wrapping_sub(8).wrapping_add(dg);
             let db = dbdg.wrapping_sub(8).wrapping_add(dg);
+
             let r = prev_pixel.r.wrapping_add(dr);
             let g = prev_pixel.g.wrapping_add(dg);
             let b = prev_pixel.b.wrapping_add(db);
+
+            println!("rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}", r, g, b, dr, dg, db, drdg, dbdg);
+
             write_array.push(r);
             write_array.push(g);
             write_array.push(b);
@@ -461,10 +454,29 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
             panic!("UNRECOGNIZED BYTE {}", next_byte);
         }
     }
+    Some(write_array)
+}
+
+fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
+    let out_fname = "lenna2.png";
+
+    let path = Path::new(out_fname);
+    let file = File::create(path)?;
+    let ref mut w = BufWriter::new(file);
+
+    let mut encoder = png::Encoder::new(w, qoi_data.width, qoi_data.height);
+    encoder.set_color(qoi_data.png_type);
+    encoder.set_depth(png::BitDepth::Eight);
+
+    let mut writer = encoder.write_header()?;
+
+    let write_array = calc_from_qoi(qoi_data).unwrap();
+
     writer.write_image_data(&write_array).unwrap();
 
     Ok(())
 }
+
 
 fn write_dummy() -> std::io::Result<()> {
     let out_fname = "u.png";
@@ -515,7 +527,8 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::calc_qoif;
+    use crate::calc_to_qoi;
+    use crate::calc_from_qoi;
     use crate::hash_rgba;
     use crate::ImageData;
     use crate::PixelValue;
@@ -537,7 +550,7 @@ mod tests {
     #[test]
     fn basic_rgb() {
         let id = gen_image_data(vec![0x88, 0xFF, 0x88], 1, 1, false);
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 4 + 8);
         assert_eq!(out[14], 0xFE);
@@ -549,7 +562,7 @@ mod tests {
     #[test]
     fn basic_rgba() {
         let id = gen_image_data(vec![0x12, 0x34, 0x56, 0x78], 1, 1, true);
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 5 + 8);
         assert_eq!(out[14], 0xFF);
@@ -562,7 +575,7 @@ mod tests {
     #[test]
     fn basic_diff() {
         let id = gen_image_data(vec![1, 1, 1], 1, 1, false);
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 1 + 8);
         assert_eq!(out[14], 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
@@ -571,7 +584,7 @@ mod tests {
     #[test]
     fn pos_neg_diff() {
         let id = gen_image_data(vec![1, 1, 1, 2, 2, 2, 0, 0, 0], 3, 1, false);
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 3 + 8);
         assert_eq!(out[14], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
@@ -582,11 +595,14 @@ mod tests {
     #[test]
     fn basic_luma_diff() {
         let id = gen_image_data(vec![240, 240, 240], 3, 1, false);
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 2 + 8);
         assert_eq!(out[14], 0x80 | 16);
         assert_eq!(out[15], 8 << 4 | 8 << 0);
+        let od = gen_image_data(out, 3, 1, false);
+        calc_from_qoi(od);
+        assert!(false);
     }
 
     #[test]
@@ -597,7 +613,7 @@ mod tests {
             1,
             false,
         );
-        let out = calc_qoif(id).unwrap();
+        let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
 
         let repeated_px = PixelValue {
