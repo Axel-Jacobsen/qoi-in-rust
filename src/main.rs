@@ -425,7 +425,10 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
             let g = prev_pixel.g.wrapping_add(dg);
             let b = prev_pixel.b.wrapping_add(db);
 
-            println!("rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}", r, g, b, dr, dg, db, drdg, dbdg);
+            println!(
+                "rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}",
+                r, g, b, dr, dg, db, drdg, dbdg
+            );
 
             write_array.push(r);
             write_array.push(g);
@@ -477,7 +480,6 @@ fn decode_qoif(qoi_data: ImageData) -> std::io::Result<()> {
     Ok(())
 }
 
-
 fn write_dummy() -> std::io::Result<()> {
     let out_fname = "u.png";
 
@@ -527,8 +529,8 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::calc_to_qoi;
     use crate::calc_from_qoi;
+    use crate::calc_to_qoi;
     use crate::hash_rgba;
     use crate::ImageData;
     use crate::PixelValue;
@@ -618,7 +620,15 @@ mod tests {
 
     #[test]
     fn test_basic_run() {
-        let id = gen_image_data(vec![127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127], 6, 1, false);
+        let id = gen_image_data(
+            vec![
+                127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+                127, 127,
+            ],
+            6,
+            1,
+            false,
+        );
         let out = calc_to_qoi(id).unwrap();
         println!("{:?}", out);
         assert_eq!(out.len(), 14 + 4 + 1 + 8);
@@ -651,13 +661,15 @@ mod tests {
         // luma + 2 * rgb + idx
         let expected_file_len = 14 + 2 + 2 * 4 + 1 + 8;
         assert_eq!(
-            out.len(), expected_file_len,
+            out.len(),
+            expected_file_len,
             "out len is {} expected {}",
             out.len(),
             expected_file_len
         );
         assert_eq!(
-            out[24], 0x00 | repeated_px_idx as u8,
+            out[24],
+            0x00 | repeated_px_idx as u8,
             "repeated_px_idx is {}",
             repeated_px_idx
         );
