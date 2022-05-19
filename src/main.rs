@@ -393,9 +393,9 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
             };
             prev_pixel = prev_pixel_arr[idx as usize].clone();
         } else if next_byte >> 6 == 0b01 {
-            let dr = 0b00110000 & next_byte;
-            let dg = 0b00001100 & next_byte;
-            let db = 0b00000011 & next_byte;
+            let dr = (next_byte >> 4) & 0x3;
+            let dg = (next_byte >> 2) & 0x3;
+            let db = (next_byte >> 0) & 0x3;
             let r = prev_pixel.r.wrapping_sub(2).wrapping_add(dr);
             let g = prev_pixel.g.wrapping_sub(2).wrapping_add(dg);
             let b = prev_pixel.b.wrapping_sub(2).wrapping_add(db);
@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(out[6], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
         let od = gen_image_data(out, false);
         let decoded = calc_from_qoi(od).unwrap();
-        assert_eq!(image_data.as_slice(), &decoded[14..decoded.len()-8]);
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
