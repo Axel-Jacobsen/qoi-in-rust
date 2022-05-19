@@ -114,7 +114,7 @@ fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
         } else {
             png::ColorType::Rgba
         },
-        bytes: data_bytes,
+        bytes: data_bytes[..data_bytes.len() - 8].to_vec(),
         width: width,
         height: height,
         is_srgb: is_srgb,
