@@ -6,9 +6,23 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 
-/* Slow and non-idomatic */
+/* Slow and non-idomatic
+ *
+ * Used to learn some simple Rust
+ * There is probably a bunch here that
+ * is really bad and slow, bad error
+ * handling, e.t.c. so be warned!
+ * This is just a POC.
+ */
 
-// i know that it is garb to do this but oh well
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PixelValue {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
 struct ImageData {
     png_type: png::ColorType,
     bytes: Vec<u8>,
@@ -119,14 +133,6 @@ fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
         height: height,
         is_srgb: is_srgb,
     })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PixelValue {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
 }
 
 fn hash_rgba(px: &PixelValue) -> usize {
