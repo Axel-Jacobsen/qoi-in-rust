@@ -1,3 +1,4 @@
+use std::env;
 use std::fmt;
 use std::fs::File;
 use std::io::BufWriter;
@@ -61,8 +62,8 @@ fn get_pixel_size(color_type: png::ColorType) -> usize {
 }
 
 // i know that this is also garb but please be kind (for now)
-fn get_encoding_file_data() -> Result<ImageData, png::DecodingError> {
-    let decoder = png::Decoder::new(File::open("lenna.png")?);
+fn get_encoding_file_data(fname: &String) -> Result<ImageData, png::DecodingError> {
+    let decoder = png::Decoder::new(File::open(fname)?);
 
     let mut reader = decoder.read_info()?;
     let mut buf = vec![0; reader.output_buffer_size()];
@@ -122,7 +123,7 @@ fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
     })
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PixelValue {
     r: u8,
     g: u8,
@@ -240,10 +241,9 @@ fn encode_luma(dg: u8, drdg: u8, dbdg: u8) -> [u8; 2] {
     [0x80 | dg, drdg << 4 | dbdg << 0]
 }
 
-fn calc_to_qoi(png_data: ImageData) -> std::io::Result<Vec<u8>> {
+fn calc_to_qoi(png_data: &ImageData) -> std::io::Result<Vec<u8>> {
     let mut out_file: Vec<u8> = vec![];
 
-    out_file.extend(&create_qoif_header(&png_data));
 
     let mut prev_pixel = PixelValue {
         r: 0,
@@ -307,15 +307,16 @@ fn calc_to_qoi(png_data: ImageData) -> std::io::Result<Vec<u8>> {
     if prev_run > 0 {
         out_file.extend(&encode_run(prev_run));
     }
-    out_file.extend(&create_qoif_footer());
     Ok(out_file)
 }
 
 fn encode_qoif(png_data: ImageData) -> std::io::Result<()> {
     let out_fname = "out.qoi";
     let mut out_file = File::create(out_fname)?;
-    let v = calc_to_qoi(png_data).unwrap();
-    out_file.write_all(&v)
+    out_file.write_all(&create_qoif_header(&png_data)).unwrap();
+    let v = calc_to_qoi(&png_data).unwrap();
+    out_file.write_all(&v).unwrap();
+    out_file.write_all(&create_qoif_footer())
 }
 
 fn grab_n<T: Clone>(itr: &mut std::slice::Iter<T>, n: u8) -> Option<Vec<T>> {
@@ -353,8 +354,7 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
     // way to size this?
     let mut write_array: Vec<u8> = vec![];
 
-    let end_of_data = qoi_data.bytes.len() - 8;
-    let mut qoi_iter = qoi_data.bytes[..end_of_data].iter();
+    let mut qoi_iter = qoi_data.bytes.iter();
     while let Some(&next_byte) = qoi_iter.next() {
         // check for 8-bit tags
         if next_byte == 0xFE {
@@ -425,11 +425,10 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
             let g = prev_pixel.g.wrapping_add(dg);
             let b = prev_pixel.b.wrapping_add(db);
 
-            println!(
-                "rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}",
-                r, g, b, dr, dg, db, drdg, dbdg
-            );
-
+            // println!(
+            //     "rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}",
+            //     r, g, b, dr, dg, db, drdg, dbdg
+            // );
             write_array.push(r);
             write_array.push(g);
             write_array.push(b);
@@ -515,8 +514,15 @@ fn main() -> std::io::Result<()> {
     /*
      *PNG -> QOI -> PNG?
      */
+    let args: Vec<String> = env::args().collect();
     write_dummy().unwrap();
-    let image_data = get_encoding_file_data()?;
+    let base_fname = "lenna.png".to_string();
+    let fname = if args.len() == 1 {
+        &base_fname
+    } else {
+        &args[1]
+    };
+    let image_data = get_encoding_file_data(fname)?;
     match image_data.png_type {
         png::ColorType::Rgb => encode_qoif(image_data),
         png::ColorType::Rgba => encode_qoif(image_data),
@@ -535,7 +541,8 @@ mod tests {
     use crate::ImageData;
     use crate::PixelValue;
 
-    fn gen_image_data(v: Vec<u8>, width: u32, height: u32, is_rgba: bool) -> ImageData {
+    fn gen_image_data(v: Vec<u8>, is_rgba: bool) -> ImageData {
+        let l = v.len() as u32;
         ImageData {
             png_type: if is_rgba {
                 png::ColorType::Rgba
@@ -543,112 +550,143 @@ mod tests {
                 png::ColorType::Rgb
             },
             bytes: v,
-            width: width,
-            height: height,
+            width: l, // WLOG this is true
+            height: 1_u32,
             is_srgb: true,
         }
     }
 
     #[test]
     fn basic_rgb() {
-        let id = gen_image_data(vec![0x88, 0xFF, 0x88], 1, 1, false);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![0x88, 0xFF, 0x88];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 4 + 8);
-        assert_eq!(out[14], 0xFE);
-        assert_eq!(out[15], 0x88);
-        assert_eq!(out[16], 0xFF);
-        assert_eq!(out[17], 0x88);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], 0xFE);
+        assert_eq!(out[1], 0x88);
+        assert_eq!(out[2], 0xFF);
+        assert_eq!(out[3], 0x88);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn basic_rgba() {
-        let id = gen_image_data(vec![0x12, 0x34, 0x56, 0x78], 1, 1, true);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![0x12, 0x34, 0x56, 0x78];
+        let id = gen_image_data(image_data.clone(), true);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 5 + 8);
-        assert_eq!(out[14], 0xFF);
-        assert_eq!(out[15], 0x12);
-        assert_eq!(out[16], 0x34);
-        assert_eq!(out[17], 0x56);
-        assert_eq!(out[18], 0x78);
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0], 0xFF);
+        assert_eq!(out[1], 0x12);
+        assert_eq!(out[2], 0x34);
+        assert_eq!(out[3], 0x56);
+        assert_eq!(out[4], 0x78);
+        let od = gen_image_data(out, true);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn basic_diff() {
-        let id = gen_image_data(vec![1, 1, 1], 1, 1, false);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![1, 1, 1];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 1 + 8);
-        assert_eq!(out[14], 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn pos_neg_diff() {
-        let id = gen_image_data(vec![1, 1, 1, 2, 2, 2, 0, 0, 0], 3, 1, false);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![1, 1, 1, 2, 2, 2, 100, 100, 100, 98, 98, 98];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 3 + 8);
-        assert_eq!(out[14], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
-        assert_eq!(out[15], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
-        assert_eq!(out[16], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
+        assert_eq!(out.len(), 3 + 4);
+        assert_eq!(out[0], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        assert_eq!(out[1], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        assert_eq!(out[6], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data.as_slice(), &decoded[14..decoded.len()-8]);
+    }
+
+    #[test]
+    fn diff_overflows() {
+        let image_data = vec![254, 254, 254, 255, 255, 255, 0, 0, 0];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
+        println!("{:?}", out);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
+        assert_eq!(out[1], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        assert_eq!(out[2], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn basic_luma_diff() {
-        let id = gen_image_data(vec![240, 240, 240], 1, 1, false);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![240, 240, 240];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 2 + 8);
-        assert_eq!(out[14], 0x80 | 16);
-        assert_eq!(out[15], 8 << 4 | 8 << 0);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], 0x80 | 16);
+        assert_eq!(out[1], 8 << 4 | 8 << 0);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn basic_luma_diff_2() {
-        let id = gen_image_data(vec![240, 240, 240, 200, 208, 215], 2, 1, false);
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![240, 240, 240, 200, 208, 215];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 2 * 2 + 8);
-        assert_eq!(out[14], 0x80 | 16);
-        assert_eq!(out[15], 8 << 4 | 8 << 0);
-        assert_eq!(out[16], 0x80 | 0);
-        assert_eq!(out[17], 0 << 4 | 15 << 0);
-        let od = gen_image_data(out, 3, 1, false);
-        calc_from_qoi(od);
+        assert_eq!(out.len(), 2 * 2);
+        assert_eq!(out[0], 0x80 | 16);
+        assert_eq!(out[1], 8 << 4 | 8 << 0);
+        assert_eq!(out[2], 0x80 | 0);
+        assert_eq!(out[3], 0 << 4 | 15 << 0);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn test_basic_run() {
-        let id = gen_image_data(
-            vec![
-                127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
-                127, 127,
-            ],
-            6,
-            1,
-            false,
-        );
-        let out = calc_to_qoi(id).unwrap();
+        let image_data = vec![
+            127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+            127,
+        ];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
         println!("{:?}", out);
-        assert_eq!(out.len(), 14 + 4 + 1 + 8);
-        assert_eq!(out[14], 0xFE | 16);
-        assert_eq!(out[15], 127);
-        assert_eq!(out[16], 127);
-        assert_eq!(out[17], 127);
-        assert_eq!(out[18], 0xC0 | 5 - 1);
+        assert_eq!(out.len(), 4 + 1);
+        assert_eq!(out[0], 0xFE | 16);
+        assert_eq!(out[1], 127);
+        assert_eq!(out[2], 127);
+        assert_eq!(out[3], 127);
+        assert_eq!(out[4], 0xC0 | 5 - 1);
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 
     #[test]
     fn basic_index() {
-        let id = gen_image_data(
-            vec![10, 10, 10, 23, 255, 23, 96, 45, 33, 10, 10, 10],
-            4,
-            1,
-            false,
-        );
-        let out = calc_to_qoi(id).unwrap();
-        println!("{:?}", out);
+        let image_data = vec![10, 10, 10, 23, 255, 23, 96, 45, 33, 10, 10, 10];
+        let id = gen_image_data(image_data.clone(), false);
+        let out = calc_to_qoi(&id).unwrap();
 
         let repeated_px = PixelValue {
             r: 10,
@@ -659,7 +697,7 @@ mod tests {
         let repeated_px_idx = hash_rgba(&repeated_px);
 
         // luma + 2 * rgb + idx
-        let expected_file_len = 14 + 2 + 2 * 4 + 1 + 8;
+        let expected_file_len = 2 + 2 * 4 + 1;
         assert_eq!(
             out.len(),
             expected_file_len,
@@ -668,10 +706,13 @@ mod tests {
             expected_file_len
         );
         assert_eq!(
-            out[24],
+            out[10],
             0x00 | repeated_px_idx as u8,
             "repeated_px_idx is {}",
             repeated_px_idx
         );
+        let od = gen_image_data(out, false);
+        let decoded = calc_from_qoi(od).unwrap();
+        assert_eq!(image_data, decoded);
     }
 }
