@@ -104,11 +104,9 @@ fn get_decoding_file_data() -> Result<ImageData, png::DecodingError> {
     let channels = header[12];
     let is_srgb = header[13] == 0;
 
-    println!("outgoing num channels: {}", channels);
     // just read it all into mem like a degenerate
     let mut data_bytes: Vec<u8> = vec![];
     let _bytes_read = decoder.read_to_end(&mut data_bytes);
-    println!("bytes read: {:?}", _bytes_read);
 
     Ok(ImageData {
         png_type: if channels == 3 {
@@ -244,7 +242,6 @@ fn encode_luma(dg: u8, drdg: u8, dbdg: u8) -> [u8; 2] {
 fn calc_to_qoi(png_data: &ImageData) -> std::io::Result<Vec<u8>> {
     let mut out_file: Vec<u8> = vec![];
 
-
     let mut prev_pixel = PixelValue {
         r: 0,
         g: 0,
@@ -272,29 +269,23 @@ fn calc_to_qoi(png_data: &ImageData) -> std::io::Result<Vec<u8>> {
             continue;
         } else if prev_run > 0 {
             // handle leaving a run
-            println!("writing run of len {}", prev_run);
             out_file.extend(&encode_run(prev_run));
             prev_run = 0;
         }
 
         if let Some(idx) = get_pixel_index(&pixel, &prev_pixel_arr) {
             // check for idx
-            println!("idx {}", idx);
             out_file.extend(&encode_idx(idx));
         } else if let Some([dr, dg, db]) = get_pixel_qoi_diff(&prev_pixel, &pixel) {
             // check for diff
-            println!("diff {} {} {}", dr, dg, db);
             out_file.extend(&encode_diff(dr, dg, db));
         } else if let Some([dg, drdg, dbdg]) = get_pixel_luma_diff(&prev_pixel, &pixel) {
             // check for luma
-            println!("luma dg {} drdg {} dbdg {}", dg, drdg, dbdg);
             out_file.extend(&encode_luma(dg, drdg, dbdg));
         } else {
             if pixel_size == 3 {
-                println!("rgb {} {} {}", pixel.r, pixel.g, pixel.b);
                 out_file.extend(&encode_qoip_rgb(&pixel));
             } else if pixel_size == 4 {
-                println!("rgb {} {} {} {}", pixel.r, pixel.g, pixel.b, pixel.a);
                 out_file.extend(&encode_qoip_rgba(&pixel));
             } else {
                 panic!("How did you get here!");
@@ -425,10 +416,6 @@ fn calc_from_qoi(qoi_data: ImageData) -> Option<Vec<u8>> {
             let g = prev_pixel.g.wrapping_add(dg);
             let b = prev_pixel.b.wrapping_add(db);
 
-            // println!(
-            //     "rgb {},{},{}, dr {} dg {} db {}, drdg {}, dbdg {}",
-            //     r, g, b, dr, dg, db, drdg, dbdg
-            // );
             write_array.push(r);
             write_array.push(g);
             write_array.push(b);
@@ -561,7 +548,6 @@ mod tests {
         let image_data = vec![0x88, 0xFF, 0x88];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 4);
         assert_eq!(out[0], 0xFE);
         assert_eq!(out[1], 0x88);
@@ -577,7 +563,6 @@ mod tests {
         let image_data = vec![0x12, 0x34, 0x56, 0x78];
         let id = gen_image_data(image_data.clone(), true);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 5);
         assert_eq!(out[0], 0xFF);
         assert_eq!(out[1], 0x12);
@@ -594,7 +579,6 @@ mod tests {
         let image_data = vec![1, 1, 1];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0], 0x40 | (1 + 2) << 4 | (1 + 2) << 2 | (1 + 2) << 0);
         let od = gen_image_data(out, false);
@@ -607,7 +591,6 @@ mod tests {
         let image_data = vec![1, 1, 1, 2, 2, 2, 100, 100, 100, 98, 98, 98];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 3 + 4);
         assert_eq!(out[0], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
         assert_eq!(out[1], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
@@ -622,7 +605,6 @@ mod tests {
         let image_data = vec![254, 254, 254, 255, 255, 255, 0, 0, 0];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0], 0x40 | 0 << 4 | 0 << 2 | 0 << 0);
         assert_eq!(out[1], 0x40 | 1 + 2 << 4 | 1 + 2 << 2 | 1 + 2 << 0);
@@ -637,7 +619,6 @@ mod tests {
         let image_data = vec![240, 240, 240];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], 0x80 | 16);
         assert_eq!(out[1], 8 << 4 | 8 << 0);
@@ -651,7 +632,6 @@ mod tests {
         let image_data = vec![240, 240, 240, 200, 208, 215];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 2 * 2);
         assert_eq!(out[0], 0x80 | 16);
         assert_eq!(out[1], 8 << 4 | 8 << 0);
@@ -670,7 +650,6 @@ mod tests {
         ];
         let id = gen_image_data(image_data.clone(), false);
         let out = calc_to_qoi(&id).unwrap();
-        println!("{:?}", out);
         assert_eq!(out.len(), 4 + 1);
         assert_eq!(out[0], 0xFE | 16);
         assert_eq!(out[1], 127);
