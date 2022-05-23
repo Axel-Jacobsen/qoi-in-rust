@@ -1,3 +1,5 @@
 # QOI
 
-Just the encoder right now.
+Its Workin!
+
+There is no command line program or anything, just learning some Rust.
